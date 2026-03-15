@@ -1,8 +1,9 @@
+import os
+import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import datetime
 
-TOKEN = "8627613345:AAGcA7LYcwiOkH8IGrYuVJg2_D1VbdykT0U"
+TOKEN = os.getenv("BOT_TOKEN")
 
 users = {}
 
@@ -29,12 +30,18 @@ async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"Break time: {minutes} minutes")
 
-app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    if not TOKEN:
+        raise ValueError("BOT_TOKEN is missing")
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("away", away))
-app.add_handler(CommandHandler("back", back))
+    app = ApplicationBuilder().token(TOKEN).build()
 
-print("Bot running...")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("away", away))
+    app.add_handler(CommandHandler("back", back))
 
-app.run_polling()
+    print("Bot running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
