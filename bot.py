@@ -16,9 +16,11 @@ DATA_FILE = "break_data.json"
 TIMEZONE = ZoneInfo("Asia/Manila")
 
 ROLES = ["CS", "TL", "HTL", "QI", "WD", "DP"]
+
 DEFAULT_BREAK_LIMIT = 60
-AWAY_LIMIT = 60
-NEAR_LIMIT_MINUTES = 5  # show ⚠️ when within 5 mins of limit
+DEFAULT_AWAY_TOTAL_LIMIT = 60
+AWAY_SESSION_LIMIT = 20
+NEAR_LIMIT_MINUTES = 5  # warning marker threshold
 
 keyboard = [
     ["☕ Start Break", "☕ End Break"],
@@ -28,26 +30,28 @@ keyboard = [
 reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
+def default_data():
+    return {
+        "default_break_limit": DEFAULT_BREAK_LIMIT,
+        "away_total_limit": DEFAULT_AWAY_TOTAL_LIMIT,
+        "away_session_limit": AWAY_SESSION_LIMIT,
+        "users": {},
+    }
+
+
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {
-            "default_break_limit": DEFAULT_BREAK_LIMIT,
-            "away_limit": AWAY_LIMIT,
-            "users": {}
-        }
+        return default_data()
 
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
-        data = {
-            "default_break_limit": DEFAULT_BREAK_LIMIT,
-            "away_limit": AWAY_LIMIT,
-            "users": {}
-        }
+        data = default_data()
 
     data.setdefault("default_break_limit", DEFAULT_BREAK_LIMIT)
-    data.setdefault("away_limit", AWAY_LIMIT)
+    data.setdefault("away_total_limit", DEFAULT_AWAY_TOTAL_LIMIT)
+    data.setdefault("away_session_limit", AWAY_SESSION_LIMIT)
     data.setdefault("users", {})
     return data
 
@@ -112,6 +116,14 @@ def get_user_break_limit(data, user):
     if isinstance(custom, int) and custom > 0:
         return custom
     return int(data.get("default_break_limit", DEFAULT_BREAK_LIMIT))
+
+
+def get_away_total_limit(data):
+    return int(data.get("away_total_limit", DEFAULT_AWAY_TOTAL_LIMIT))
+
+
+def get_away_session_limit(data):
+    return int(data.get("away_session_limit", AWAY_SESSION_LIMIT))
 
 
 def get_status_marker(elapsed: int, limit: int) -> str:
@@ -193,7 +205,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     raw_name = update.effective_user.first_name.upper().replace(" ", "-")
 
-    # FIX: prevent duplicate names like IND06-CS-IND06-CS-NIKKA
+    # Prevent duplicate registration names like IND06-CS-IND06-CS-NIKKA
     if raw_name.startswith("IND06-"):
         registered_name = raw_name
     else:
@@ -338,9 +350,12 @@ async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user["away_total"] += session_minutes
     user["active"] = None
 
-    away_limit = int(data.get("away_limit", AWAY_LIMIT))
-    remaining = max(0, away_limit - user["away_total"])
-    exceeded = max(0, user["away_total"] - away_limit)
+    away_total_limit = get_away_total_limit(data)
+    away_session_limit = get_away_session_limit(data)
+
+    remaining = max(0, away_total_limit - user["away_total"])
+    session_exceeded = max(0, session_minutes - away_session_limit)
+    total_exceeded = max(0, user["away_total"] - away_total_limit)
 
     save_data(data)
 
@@ -352,8 +367,11 @@ async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Remaining away time: {remaining} mins"
     )
 
-    if exceeded > 0:
-        message += f"\n⚠️ You exceeded the away limit by {exceeded} mins."
+    if session_exceeded > 0:
+        message += f"\n⚠️ You exceeded the 20-minute away session limit by {session_exceeded} mins."
+
+    if total_exceeded > 0:
+        message += f"\n⚠️ You exceeded the total away limit by {total_exceeded} mins."
 
     await update.message.reply_text(message)
 
@@ -371,14 +389,16 @@ async def mytotal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     break_limit = get_user_break_limit(data, user)
-    away_limit = int(data.get("away_limit", AWAY_LIMIT))
+    away_total_limit = get_away_total_limit(data)
+    away_session_limit = get_away_session_limit(data)
 
     await update.message.reply_text(
         f"{user['name']}\n"
         f"Break total: {user['break_total']} mins\n"
         f"Break remaining: {max(0, break_limit - user['break_total'])} mins\n"
         f"Away total: {user['away_total']} mins\n"
-        f"Away remaining: {max(0, away_limit - user['away_total'])} mins\n"
+        f"Away remaining: {max(0, away_total_limit - user['away_total'])} mins\n"
+        f"Per away max: {away_session_limit} mins\n"
         f"Combined total: {user['break_total'] + user['away_total']} mins"
     )
 
@@ -416,7 +436,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "role": user.get("role", "UNKNOWN"),
             })
         elif active["type"] == "away":
-            limit = int(data.get("away_limit", AWAY_LIMIT))
+            limit = get_away_session_limit(data)
             away_users.append({
                 "name": user["name"],
                 "elapsed": elapsed,
@@ -574,7 +594,8 @@ async def currentlimits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [
         "Current limits\n",
         f"Default break: {data.get('default_break_limit', DEFAULT_BREAK_LIMIT)} mins",
-        f"Default away: {data.get('away_limit', AWAY_LIMIT)} mins",
+        f"Default away total: {data.get('away_total_limit', DEFAULT_AWAY_TOTAL_LIMIT)} mins",
+        f"Per away session max: {data.get('away_session_limit', AWAY_SESSION_LIMIT)} mins",
         "",
         "Custom break limits:"
     ]
@@ -628,15 +649,23 @@ async def forceend(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exceeded = max(0, user["break_total"] - limit)
         status_type = "Break"
         remaining_text = f"Remaining break time: {remaining} mins"
-        exceeded_text = f"\n⚠️ Exceeded break limit by {exceeded} mins." if exceeded > 0 else ""
+        exceeded_text = (
+            f"\n⚠️ Exceeded break limit by {exceeded} mins." if exceeded > 0 else ""
+        )
     else:
         user["away_total"] += session_minutes
-        limit = int(data.get("away_limit", AWAY_LIMIT))
-        remaining = max(0, limit - user["away_total"])
-        exceeded = max(0, user["away_total"] - limit)
+        away_total_limit = get_away_total_limit(data)
+        away_session_limit = get_away_session_limit(data)
+        remaining = max(0, away_total_limit - user["away_total"])
+        session_exceeded = max(0, session_minutes - away_session_limit)
+        total_exceeded = max(0, user["away_total"] - away_total_limit)
         status_type = "Away"
         remaining_text = f"Remaining away time: {remaining} mins"
-        exceeded_text = f"\n⚠️ Exceeded away limit by {exceeded} mins." if exceeded > 0 else ""
+        exceeded_text = ""
+        if session_exceeded > 0:
+            exceeded_text += f"\n⚠️ Exceeded 20-minute away session limit by {session_exceeded} mins."
+        if total_exceeded > 0:
+            exceeded_text += f"\n⚠️ Exceeded total away limit by {total_exceeded} mins."
 
     user["active"] = None
     save_data(data)
