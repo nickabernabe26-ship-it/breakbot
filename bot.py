@@ -191,9 +191,13 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = str(update.effective_user.id)
     chat_id = update.effective_chat.id
-    first_name = update.effective_user.first_name.upper().replace(" ", "-")
+    raw_name = update.effective_user.first_name.upper().replace(" ", "-")
 
-    registered_name = f"IND06-{role}-{first_name}"
+    # FIX: prevent duplicate names like IND06-CS-IND06-CS-NIKKA
+    if raw_name.startswith("IND06-"):
+        registered_name = raw_name
+    else:
+        registered_name = f"IND06-{role}-{raw_name}"
 
     data = load_data()
     data["users"][uid] = {
