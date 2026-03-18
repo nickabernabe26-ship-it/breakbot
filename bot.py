@@ -177,11 +177,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Break Tracker is ready.\n\n"
         "Register first using:\n"
         "/register CS\n"
-        "/register TL\n"
+        "/register CSL\n"
         "/register HTL\n"
         "/register QI\n"
         "/register WD\n"
-        "/register DP",
+        "/register DP"
+        "/register PL",
         reply_markup=reply_markup
     )
 
