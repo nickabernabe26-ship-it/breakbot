@@ -20,7 +20,7 @@ ROLES = ["CS", "CSL", "HTL", "QI", "WD", "DP", "PL"]
 DEFAULT_BREAK_LIMIT = 60
 DEFAULT_AWAY_TOTAL_LIMIT = 60
 AWAY_SESSION_LIMIT = 20
-NEAR_LIMIT_MINUTES = 5  # warning marker threshold
+NEAR_LIMIT_MINUTES = 5
 
 keyboard = [
     ["☕ Start Break", "☕ End Break"],
@@ -181,7 +181,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/register HTL\n"
         "/register QI\n"
         "/register WD\n"
-        "/register DP"
+        "/register DP\n"
         "/register PL",
         reply_markup=reply_markup
     )
@@ -198,7 +198,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     role = context.args[0].upper().strip()
     if role not in ROLES:
         await update.message.reply_text(
-            "Invalid role.\nUse one of: CS, TL, HTL, QI, WD, DP"
+            "Invalid role.\nUse one of: CS, CSL, HTL, QI, WD, DP, PL"
         )
         return
 
@@ -206,7 +206,6 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     raw_name = update.effective_user.first_name.upper().replace(" ", "-")
 
-    # Prevent duplicate registration names like IND06-CS-IND06-CS-NIKKA
     if raw_name.startswith("IND06-"):
         registered_name = raw_name
     else:
@@ -711,6 +710,37 @@ async def resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def resetall(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
+    if not await is_admin(update, context):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    data = load_data()
+
+    for user in data["users"].values():
+        user["break_total"] = 0
+        user["away_total"] = 0
+        user["active"] = None
+
+    save_data(data)
+
+    await update.message.reply_text("🔄 All users have been reset.")
+
+
+async def auto_reset(context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+
+    for user in data["users"].values():
+        user["break_total"] = 0
+        user["away_total"] = 0
+        user["active"] = None
+
+    save_data(data)
+
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
@@ -732,10 +762,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    if not TOKEN:
-        raise ValueError("BOT_TOKEN is missing")
-
     app = ApplicationBuilder().token(TOKEN).build()
+
+    app.job_queue.run_daily(
+        auto_reset,
+        time=datetime.time(hour=0, minute=0, tzinfo=TIMEZONE),
+        name="midnight_reset",
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("register", register))
@@ -747,6 +780,7 @@ def main():
     app.add_handler(CommandHandler("currentlimits", currentlimits))
     app.add_handler(CommandHandler("forceend", forceend))
     app.add_handler(CommandHandler("resetuser", resetuser))
+    app.add_handler(CommandHandler("resetall", resetall))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
 
