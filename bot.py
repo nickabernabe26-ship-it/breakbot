@@ -15,7 +15,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "break_data.json"
 TIMEZONE = ZoneInfo("Asia/Manila")
 
-ROLES = ["CS", "TL", "HTL", "QI", "WD", "DP"]
+ROLES = ["CS", "CSL", "HTL", "QI", "WD", "DP", "PL"]
 
 DEFAULT_BREAK_LIMIT = 60
 DEFAULT_AWAY_TOTAL_LIMIT = 60
