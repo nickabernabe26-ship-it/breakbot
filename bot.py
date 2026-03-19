@@ -14,13 +14,11 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
-DATA_FILE = "break_data.json"
+DATA_FILE = "/mnt/data/break_data.json"
 TIMEZONE = ZoneInfo("Asia/Manila")
 
-# TL removed from current roles, but old TL users are mapped to CSL automatically.
 ROLES = ["CS", "CSL", "HTL", "QI", "WD", "DP", "PL"]
 
-# Default limits
 DEFAULT_BREAK_LIMIT = 60
 DEFAULT_AWAY_TOTAL_LIMIT = 60
 AWAY_SESSION_LIMIT = 20
@@ -51,6 +49,49 @@ def normalize_role(role: str) -> str:
     return role
 
 
+def detect_role_from_username_or_name(username=None, fallback_name=""):
+    text = f"{username or ''} {fallback_name or ''}".lower()
+
+    if "csl" in text or "tl" in text:
+        return "CSL"
+    if "htl" in text:
+        return "HTL"
+    if "pl" in text:
+        return "PL"
+    if "qi" in text:
+        return "QI"
+    if "wd" in text:
+        return "WD"
+    if "dp" in text:
+        return "DP"
+    return "CS"
+
+
+def strip_existing_prefix(name: str) -> str:
+    value = (name or "UNKNOWN").upper().replace(" ", "-")
+    prefixes = [
+        "IND06-CS-",
+        "IND06-CSL-",
+        "IND06-HTL-",
+        "IND06-QI-",
+        "IND06-WD-",
+        "IND06-DP-",
+        "IND06-PL-",
+        "IND06-TL-",
+    ]
+    for prefix in prefixes:
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    if value.startswith("IND06-"):
+        return value[6:]
+    return value
+
+
+def build_display_name(role: str, fallback_name: str):
+    clean_name = strip_existing_prefix(fallback_name)
+    return f"IND06-{role}-{clean_name}"
+
+
 def load_data():
     if not os.path.exists(DATA_FILE):
         return default_data()
@@ -67,20 +108,24 @@ def load_data():
     data.setdefault("users", {})
 
     for user in data["users"].values():
-        user.setdefault("name", "UNKNOWN")
-        user.setdefault("role", "UNKNOWN")
-        user["role"] = normalize_role(user["role"])
+        original_name = user.get("name", "UNKNOWN")
+        username = user.get("username")
+        fixed_role = detect_role_from_username_or_name(username, original_name)
+
+        user["role"] = normalize_role(fixed_role)
+        user["name"] = build_display_name(user["role"], original_name)
         user.setdefault("break_total", 0)
         user.setdefault("away_total", 0)
         user.setdefault("active", None)
         user.setdefault("chat_id", None)
         user.setdefault("custom_break_limit", None)
-        user.setdefault("username", None)
+        user.setdefault("username", username)
 
     return data
 
 
 def save_data(data):
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     temp_file = f"{DATA_FILE}.tmp"
     with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -124,11 +169,13 @@ def role_count(users):
 
 def ensure_user(data, user_id: str, chat_id: int, fallback_name: str, username=None):
     users = data["users"]
+    role = detect_role_from_username_or_name(username, fallback_name)
+    display_name = build_display_name(role, fallback_name)
 
     if user_id not in users:
         users[user_id] = {
-            "name": fallback_name.upper(),
-            "role": "UNKNOWN",
+            "name": display_name,
+            "role": role,
             "break_total": 0,
             "away_total": 0,
             "active": None,
@@ -137,17 +184,15 @@ def ensure_user(data, user_id: str, chat_id: int, fallback_name: str, username=N
             "username": username,
         }
     else:
-        users[user_id]["chat_id"] = chat_id
-        users[user_id]["role"] = normalize_role(users[user_id].get("role", "UNKNOWN"))
-        users[user_id].setdefault("name", fallback_name.upper())
-        users[user_id].setdefault("break_total", 0)
-        users[user_id].setdefault("away_total", 0)
-        users[user_id].setdefault("active", None)
-        users[user_id].setdefault("custom_break_limit", None)
-        if username:
-            users[user_id]["username"] = username
-        else:
-            users[user_id].setdefault("username", None)
+        user = users[user_id]
+        user["chat_id"] = chat_id
+        user["role"] = role
+        user["name"] = display_name
+        user.setdefault("break_total", 0)
+        user.setdefault("away_total", 0)
+        user.setdefault("active", None)
+        user.setdefault("custom_break_limit", None)
+        user["username"] = username
 
 
 def get_user_break_limit(data, user):
@@ -215,7 +260,6 @@ def close_active_session(data, user, end_time):
     try:
         start_dt = datetime.datetime.fromisoformat(active["start"])
     except Exception:
-        user["active"] = None
         return None
 
     session_minutes = minutes_between(start_dt, end_time)
@@ -225,6 +269,8 @@ def close_active_session(data, user, end_time):
         user["break_total"] = user.get("break_total", 0) + session_minutes
     elif status_type == "away":
         user["away_total"] = user.get("away_total", 0) + session_minutes
+    else:
+        return None
 
     user["active"] = None
 
@@ -268,56 +314,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Break Tracker is ready.\n\n"
         "Buttons are active.\n"
-        "If you are not registered yet, use /register ROLE\n\n"
-        "Roles:\nCS, CSL, HTL, QI, WD, DP, PL",
+        "User record and role are detected automatically.",
         reply_markup=reply_markup,
-    )
-
-
-async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.effective_user or not update.effective_chat:
-        return
-
-    if not context.args:
-        await update.message.reply_text("Usage:\n/register CS")
-        return
-
-    role = normalize_role(context.args[0].upper().strip())
-    if role not in ROLES:
-        await update.message.reply_text(
-            "Invalid role.\nUse one of: CS, CSL, HTL, QI, WD, DP, PL"
-        )
-        return
-
-    uid = str(update.effective_user.id)
-    chat_id = update.effective_chat.id
-    username = update.effective_user.username
-    raw_name = update.effective_user.first_name.upper().replace(" ", "-")
-
-    if raw_name.startswith("IND06-"):
-        registered_name = raw_name
-    else:
-        registered_name = f"IND06-{role}-{raw_name}"
-
-    async with DATA_LOCK:
-        data = load_data()
-        old_user = data["users"].get(uid, {})
-        data["users"][uid] = {
-            "name": registered_name,
-            "role": role,
-            "break_total": old_user.get("break_total", 0),
-            "away_total": old_user.get("away_total", 0),
-            "active": old_user.get("active"),
-            "chat_id": chat_id,
-            "custom_break_limit": old_user.get("custom_break_limit"),
-            "username": username,
-        }
-        save_data(data)
-
-    await update.message.reply_text(
-        f"✅ Registration successful\n\n"
-        f"Name: {registered_name}\n"
-        f"Role: {role}"
     )
 
 
@@ -336,10 +334,6 @@ async def start_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update.effective_user.username,
         )
         user = data["users"].get(uid)
-
-        if normalize_role(user.get("role")) == "UNKNOWN":
-            await update.message.reply_text("Please register first.\n/register CS")
-            return
 
         if user.get("active") is not None:
             await update.message.reply_text(
@@ -360,24 +354,25 @@ async def start_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def end_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.effective_user:
+    if not update.message or not update.effective_user or not update.effective_chat:
         return
 
     async with DATA_LOCK:
         data = load_data()
         uid = str(update.effective_user.id)
+
+        ensure_user(
+            data,
+            uid,
+            update.effective_chat.id,
+            update.effective_user.first_name,
+            update.effective_user.username,
+        )
         user = data["users"].get(uid)
 
-        if not user:
-            await update.message.reply_text("User record not found. Please register again.")
-            return
-
         active = user.get("active")
-        if not active:
-            await update.message.reply_text(
-                "You do not have an active break.\n"
-                "Possible reason: na-reset o nawala ang active session."
-            )
+        if not active or "start" not in active:
+            await update.message.reply_text("You do not have an active break.")
             return
 
         if active.get("type") != "break":
@@ -386,6 +381,13 @@ async def end_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         current = now_local()
         closed = close_active_session(data, user, current)
+
+        if not closed:
+            await update.message.reply_text(
+                "Your active break data looks invalid. Admin may use /forceend if needed."
+            )
+            return
+
         session_minutes = closed["session_minutes"]
 
         break_limit = get_user_break_limit(data, user)
@@ -424,10 +426,6 @@ async def start_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         user = data["users"].get(uid)
 
-        if normalize_role(user.get("role")) == "UNKNOWN":
-            await update.message.reply_text("Please register first.\n/register CS")
-            return
-
         if user.get("active") is not None:
             await update.message.reply_text(
                 "You already have an active status. Please end it first."
@@ -447,24 +445,25 @@ async def start_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.effective_user:
+    if not update.message or not update.effective_user or not update.effective_chat:
         return
 
     async with DATA_LOCK:
         data = load_data()
         uid = str(update.effective_user.id)
+
+        ensure_user(
+            data,
+            uid,
+            update.effective_chat.id,
+            update.effective_user.first_name,
+            update.effective_user.username,
+        )
         user = data["users"].get(uid)
 
-        if not user:
-            await update.message.reply_text("User record not found. Please register again.")
-            return
-
         active = user.get("active")
-        if not active:
-            await update.message.reply_text(
-                "You do not have an active away status.\n"
-                "Possible reason: na-reset o nawala ang active session."
-            )
+        if not active or "start" not in active:
+            await update.message.reply_text("You do not have an active away status.")
             return
 
         if active.get("type") != "away":
@@ -473,6 +472,13 @@ async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         current = now_local()
         closed = close_active_session(data, user, current)
+
+        if not closed:
+            await update.message.reply_text(
+                "Your active away data looks invalid. Admin may use /forceend if needed."
+            )
+            return
+
         session_minutes = closed["session_minutes"]
 
         away_total_limit = get_away_total_limit(data)
@@ -501,17 +507,20 @@ async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def mytotal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.effective_user:
+    if not update.message or not update.effective_user or not update.effective_chat:
         return
 
     async with DATA_LOCK:
         data = load_data()
         uid = str(update.effective_user.id)
+        ensure_user(
+            data,
+            uid,
+            update.effective_chat.id,
+            update.effective_user.first_name,
+            update.effective_user.username,
+        )
         user = data["users"].get(uid)
-
-        if not user:
-            await update.message.reply_text("Please register first.")
-            return
 
         break_limit = get_user_break_limit(data, user)
         away_total_limit = get_away_total_limit(data)
@@ -552,7 +561,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             start_dt = datetime.datetime.fromisoformat(active["start"])
         except Exception:
-            working_users.append(user)
             continue
 
         elapsed = minutes_between(start_dt, current)
@@ -819,6 +827,15 @@ async def forceend(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         current = now_local()
         closed = close_active_session(data, user, current)
+
+        if not closed:
+            user["active"] = None
+            save_data(data)
+            await update.message.reply_text(
+                f"⚠️ Invalid active session removed for {user['name']}."
+            )
+            return
+
         session_minutes = closed["session_minutes"]
 
         if closed["type"] == "break":
@@ -974,7 +991,9 @@ async def auto_shift_reset(context: ContextTypes.DEFAULT_TYPE):
 
             active = user.get("active")
             if active:
-                close_active_session(data, user, current)
+                closed = close_active_session(data, user, current)
+                if not closed:
+                    user["active"] = None
 
             break_total = user.get("break_total", 0)
             away_total = user.get("away_total", 0)
@@ -1092,7 +1111,6 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("register", register))
     app.add_handler(CommandHandler("mytotal", mytotal))
     app.add_handler(CommandHandler("teamstatus", teamstatus))
     app.add_handler(CommandHandler("setbreak", setbreak))
