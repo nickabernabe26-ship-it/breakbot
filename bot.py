@@ -858,7 +858,7 @@ async def auto_shift_reset(context: ContextTypes.DEFAULT_TYPE):
 
         # Collect active escalation users only
         if normalize_role(user.get("role")) in ["CSL", "PL", "HTL"]:
-            if user.get("username") and active:
+            if user.get("username")
                 tag_users.append(f"@{user['username']}")
 
         # Count active sessions first before summary/reset
