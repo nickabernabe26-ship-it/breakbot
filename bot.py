@@ -15,8 +15,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "break_data.json"
 TIMEZONE = ZoneInfo("Asia/Manila")
 
-# Keep TL here for legacy users already registered as TL.
-ROLES = ["CS", "CSL", "HTL", "QI", "WD", "DP", "PL", "TL"]
+# TL removed from current roles, but old TL users are mapped to CSL automatically.
+ROLES = ["CS", "CSL", "HTL", "QI", "WD", "DP", "PL"]
 
 DEFAULT_BREAK_LIMIT = 60
 DEFAULT_AWAY_TOTAL_LIMIT = 60
@@ -40,6 +40,13 @@ def default_data():
     }
 
 
+def normalize_role(role: str) -> str:
+    """Map legacy TL users to CSL so they still work without re-registering."""
+    if role == "TL":
+        return "CSL"
+    return role
+
+
 def load_data():
     if not os.path.exists(DATA_FILE):
         return default_data()
@@ -59,11 +66,13 @@ def load_data():
     for user in data["users"].values():
         user.setdefault("name", "UNKNOWN")
         user.setdefault("role", "UNKNOWN")
+        user["role"] = normalize_role(user["role"])
         user.setdefault("break_total", 0)
         user.setdefault("away_total", 0)
         user.setdefault("active", None)
         user.setdefault("chat_id", None)
         user.setdefault("custom_break_limit", None)
+        user.setdefault("username", None)
 
     return data
 
@@ -102,13 +111,13 @@ def format_elapsed_hhmm(total_minutes: int) -> str:
 def role_count(users):
     counts = {role: 0 for role in ROLES}
     for user in users:
-        role = user.get("role")
+        role = normalize_role(user.get("role", "UNKNOWN"))
         if role in counts:
             counts[role] += 1
     return counts
 
 
-def ensure_user(data, user_id: str, chat_id: int, fallback_name: str):
+def ensure_user(data, user_id: str, chat_id: int, fallback_name: str, username: str | None = None):
     users = data["users"]
 
     if user_id not in users:
@@ -120,15 +129,19 @@ def ensure_user(data, user_id: str, chat_id: int, fallback_name: str):
             "active": None,
             "chat_id": chat_id,
             "custom_break_limit": None,
+            "username": username,
         }
     else:
         users[user_id]["chat_id"] = chat_id
+        if username:
+            users[user_id]["username"] = username
+        users[user_id]["role"] = normalize_role(users[user_id].get("role", "UNKNOWN"))
         users[user_id].setdefault("custom_break_limit", None)
         users[user_id].setdefault("break_total", 0)
         users[user_id].setdefault("away_total", 0)
         users[user_id].setdefault("active", None)
-        users[user_id].setdefault("role", "UNKNOWN")
         users[user_id].setdefault("name", fallback_name.upper())
+        users[user_id].setdefault("username", username)
 
 
 def get_user_break_limit(data, user):
@@ -170,6 +183,25 @@ def find_user_by_registered_name(data, chat_id: int, target_name: str):
     return None, None
 
 
+def get_summary_chat_id(data):
+    """Prefer a group chat (negative ID). Fallback to first available chat_id."""
+    group_ids = []
+    any_ids = []
+
+    for user in data["users"].values():
+        chat_id = user.get("chat_id")
+        if isinstance(chat_id, int):
+            any_ids.append(chat_id)
+            if chat_id < 0:
+                group_ids.append(chat_id)
+
+    if group_ids:
+        return group_ids[0]
+    if any_ids:
+        return any_ids[0]
+    return None
+
+
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not update.effective_chat or not update.effective_user:
         return False
@@ -190,13 +222,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = load_data()
     uid = str(update.effective_user.id)
-    ensure_user(data, uid, update.effective_chat.id, update.effective_user.first_name)
+    ensure_user(
+        data,
+        uid,
+        update.effective_chat.id,
+        update.effective_user.first_name,
+        update.effective_user.username,
+    )
     save_data(data)
 
     await update.message.reply_text(
         "Break Tracker is ready.\n\n"
         "Buttons are active.\n"
-        "If you are not registered yet, use /register ROLE",
+        "If you are not registered yet, use /register ROLE\n\n"
+        "Roles:\n"
+        "CS, CSL, HTL, QI, WD, DP, PL",
         reply_markup=reply_markup
     )
 
@@ -209,15 +249,16 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage:\n/register CS")
         return
 
-    role = context.args[0].upper().strip()
+    role = normalize_role(context.args[0].upper().strip())
     if role not in ROLES:
         await update.message.reply_text(
-            "Invalid role.\nUse one of: CS, CSL, HTL, QI, WD, DP, PL, TL"
+            "Invalid role.\nUse one of: CS, CSL, HTL, QI, WD, DP, PL"
         )
         return
 
     uid = str(update.effective_user.id)
     chat_id = update.effective_chat.id
+    username = update.effective_user.username
     raw_name = update.effective_user.first_name.upper().replace(" ", "-")
 
     # Prevent duplicate names like IND06-CS-IND06-CS-NIKKA
@@ -237,6 +278,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "active": old_user.get("active"),
         "chat_id": chat_id,
         "custom_break_limit": old_user.get("custom_break_limit"),
+        "username": username,
     }
     save_data(data)
 
@@ -253,10 +295,16 @@ async def start_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = load_data()
     uid = str(update.effective_user.id)
-    ensure_user(data, uid, update.effective_chat.id, update.effective_user.first_name)
+    ensure_user(
+        data,
+        uid,
+        update.effective_chat.id,
+        update.effective_user.first_name,
+        update.effective_user.username,
+    )
     user = data["users"].get(uid)
 
-    if user.get("role") == "UNKNOWN":
+    if normalize_role(user.get("role")) == "UNKNOWN":
         await update.message.reply_text("Please register first.\n/register CS")
         return
 
@@ -324,10 +372,16 @@ async def start_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = load_data()
     uid = str(update.effective_user.id)
-    ensure_user(data, uid, update.effective_chat.id, update.effective_user.first_name)
+    ensure_user(
+        data,
+        uid,
+        update.effective_chat.id,
+        update.effective_user.first_name,
+        update.effective_user.username,
+    )
     user = data["users"].get(uid)
 
-    if user.get("role") == "UNKNOWN":
+    if normalize_role(user.get("role")) == "UNKNOWN":
         await update.message.reply_text("Please register first.\n/register CS")
         return
 
@@ -452,7 +506,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "elapsed": elapsed,
                 "since": format_clock(start_dt),
                 "marker": get_status_marker(elapsed, limit),
-                "role": user.get("role", "UNKNOWN"),
+                "role": normalize_role(user.get("role", "UNKNOWN")),
             })
         elif active["type"] == "away":
             limit = get_away_session_limit(data)
@@ -461,7 +515,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "elapsed": elapsed,
                 "since": format_clock(start_dt),
                 "marker": get_status_marker(elapsed, limit),
-                "role": user.get("role", "UNKNOWN"),
+                "role": normalize_role(user.get("role", "UNKNOWN")),
             })
 
     working_counts = role_count(working_users)
@@ -783,26 +837,103 @@ async def endshift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-async def auto_reset(context: ContextTypes.DEFAULT_TYPE):
+async def auto_shift_reset(context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     current = now_local()
+    users = data["users"]
 
-    # Count active sessions first before reset so no time is lost at 12AM
-    for user in data["users"].values():
+    if not users:
+        return
+
+    msg = "📊 SHIFT SUMMARY\n\n"
+
+    overbreak = []
+    overaway = []
+    total_break = 0
+    total_away = 0
+    tag_users = []
+
+    for user in users.values():
         active = user.get("active")
-        if not active:
-            continue
 
-        start_dt = datetime.datetime.fromisoformat(active["start"])
-        session_minutes = minutes_between(start_dt, current)
+        # Collect active escalation users only
+        if normalize_role(user.get("role")) in ["CSL", "PL", "HTL"]:
+            if user.get("username") and active:
+                tag_users.append(f"@{user['username']}")
 
-        if active["type"] == "break":
-            user["break_total"] = user.get("break_total", 0) + session_minutes
-        elif active["type"] == "away":
-            user["away_total"] = user.get("away_total", 0) + session_minutes
+        # Count active sessions first before summary/reset
+        if active:
+            start_dt = datetime.datetime.fromisoformat(active["start"])
+            session_minutes = minutes_between(start_dt, current)
 
-    # Now reset for the new day
-    for user in data["users"].values():
+            if active["type"] == "break":
+                user["break_total"] += session_minutes
+            elif active["type"] == "away":
+                user["away_total"] += session_minutes
+
+        break_total = user.get("break_total", 0)
+        away_total = user.get("away_total", 0)
+
+        total_break += break_total
+        total_away += away_total
+
+        break_limit = get_user_break_limit(data, user)
+        away_limit = get_away_total_limit(data)
+
+        if break_total > break_limit:
+            excess = break_total - break_limit
+            overbreak.append(f"• {user['name']} — {break_total} mins (+{excess})")
+
+        if away_total > away_limit:
+            excess = away_total - away_limit
+            overaway.append(f"• {user['name']} — {away_total} mins (+{excess})")
+
+    if overbreak:
+        msg += "🚨 OVER BREAK:\n" + "\n".join(overbreak) + "\n\n"
+
+    if overaway:
+        msg += "🚨 OVER AWAY:\n" + "\n".join(overaway) + "\n\n"
+
+    msg += "━━━━━━━━━━━━━━\n\n"
+
+    for user in sorted(users.values(), key=lambda x: x["name"]):
+        break_total = user.get("break_total", 0)
+        away_total = user.get("away_total", 0)
+
+        break_flag = " 🚨" if break_total > get_user_break_limit(data, user) else ""
+        away_flag = " 🚨" if away_total > get_away_total_limit(data) else ""
+
+        msg += (
+            f"{user['name']}\n"
+            f"Break: {break_total} mins{break_flag}\n"
+            f"Away: {away_total} mins{away_flag}\n\n"
+        )
+
+    msg += f"━━━━━━━━━━━━━━\n📈 TEAM TOTALS\nBreak: {total_break} mins\nAway: {total_away} mins"
+
+    summary_chat_id = get_summary_chat_id(data)
+
+    if summary_chat_id:
+        try:
+            await context.bot.send_message(chat_id=summary_chat_id, text=msg)
+        except Exception:
+            pass
+
+        unique_tags = list(dict.fromkeys(tag_users))
+        if unique_tags and (overbreak or overaway):
+            try:
+                await context.bot.send_message(
+                    chat_id=summary_chat_id,
+                    text=(
+                        f"🚨 Attention: {' '.join(unique_tags)}\n"
+                        f"Overbreak / Overaway detected. Please check your team."
+                    )
+                )
+            except Exception:
+                pass
+
+    # Reset after summary
+    for user in users.values():
         user["break_total"] = 0
         user["away_total"] = 0
         user["active"] = None
@@ -834,9 +965,15 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.job_queue.run_daily(
-        auto_reset,
-        time=datetime.time(hour=0, minute=0, tzinfo=TIMEZONE),
-        name="midnight_reset",
+        auto_shift_reset,
+        time=datetime.time(hour=7, minute=0, tzinfo=TIMEZONE),
+        name="morning_shift_reset",
+    )
+
+    app.job_queue.run_daily(
+        auto_shift_reset,
+        time=datetime.time(hour=19, minute=0, tzinfo=TIMEZONE),
+        name="night_shift_reset",
     )
 
     app.add_handler(CommandHandler("start", start))
