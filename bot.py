@@ -25,6 +25,7 @@ AWAY_SESSION_LIMIT = 20
 NEAR_LIMIT_MINUTES = 5
 
 keyboard = [
+    ["🟢 On Duty"],
     ["☕ Start Break", "☕ End Break"],
     ["🚶 Start Away", "🚶 End Away"],
     ["📊 Status", "📋 My Total"],
@@ -44,15 +45,15 @@ def default_data():
 
 
 def normalize_role(role: str) -> str:
-    if role == "TL":
-        return "CSL"
-    return role
+    role = (role or "CS").upper()
+    return role if role in ROLES else "CS"
 
 
 def detect_role_from_username_or_name(username=None, fallback_name=""):
     text = f"{username or ''} {fallback_name or ''}".lower()
 
-    if "csl" in text or "tl" in text:
+    # REMOVED: tl detection
+    if "csl" in text:
         return "CSL"
     if "htl" in text:
         return "HTL"
@@ -120,6 +121,7 @@ def load_data():
         user.setdefault("chat_id", None)
         user.setdefault("custom_break_limit", None)
         user.setdefault("username", username)
+        user.setdefault("on_duty", False)
 
     return data
 
@@ -182,6 +184,7 @@ def ensure_user(data, user_id: str, chat_id: int, fallback_name: str, username=N
             "chat_id": chat_id,
             "custom_break_limit": None,
             "username": username,
+            "on_duty": False,
         }
     else:
         user = users[user_id]
@@ -193,6 +196,7 @@ def ensure_user(data, user_id: str, chat_id: int, fallback_name: str, username=N
         user.setdefault("active", None)
         user.setdefault("custom_break_limit", None)
         user["username"] = username
+        user.setdefault("on_duty", False)
 
 
 def get_user_break_limit(data, user):
@@ -231,6 +235,29 @@ def find_user_by_registered_name(data, chat_id: int, target_name: str):
     for uid, user in get_users_for_chat(data, chat_id).items():
         if user.get("name", "").strip().upper() == target:
             return uid, user
+    return None, None
+
+
+def find_user_flexible(data, chat_id: int, raw_target: str):
+    target = raw_target.strip().upper().replace("@", "").replace(" ", "-")
+    target_no_prefix = strip_existing_prefix(target)
+
+    for uid, user in get_users_for_chat(data, chat_id).items():
+        name = (user.get("name", "") or "").strip().upper()
+        username = (user.get("username", "") or "").strip().upper()
+        name_no_prefix = strip_existing_prefix(name)
+
+        if target == name:
+            return uid, user
+        if username and target == username:
+            return uid, user
+        if target == name_no_prefix:
+            return uid, user
+        if username and target in username:
+            return uid, user
+        if target_no_prefix == name_no_prefix:
+            return uid, user
+
     return None, None
 
 
@@ -281,6 +308,75 @@ def close_active_session(data, user, end_time):
     }
 
 
+def is_working_user(user):
+    if user.get("active") is not None:
+        return False
+    if user.get("on_duty"):
+        return True
+    if user.get("break_total", 0) > 0:
+        return True
+    if user.get("away_total", 0) > 0:
+        return True
+    return False
+
+
+def build_whole_shift_summary(data, chat_id: int):
+    users = get_users_for_chat(data, chat_id)
+
+    if not users:
+        return "📊 WHOLE SHIFT SUMMARY\n\nNo users found in this chat.", []
+
+    current = now_local()
+    overbreak = []
+    overaway = []
+
+    lines = ["📊 WHOLE SHIFT SUMMARY", ""]
+
+    for user in sorted(users.values(), key=lambda x: x["name"]):
+        break_total = user.get("break_total", 0)
+        away_total = user.get("away_total", 0)
+
+        active = user.get("active")
+        if active:
+            try:
+                start_dt = datetime.datetime.fromisoformat(active["start"])
+                elapsed = minutes_between(start_dt, current)
+                if active.get("type") == "break":
+                    break_total += elapsed
+                elif active.get("type") == "away":
+                    away_total += elapsed
+            except Exception:
+                pass
+
+        break_limit = get_user_break_limit(data, user)
+        away_limit = get_away_total_limit(data)
+
+        break_flag = ""
+        away_flag = ""
+
+        if break_total > break_limit:
+            break_flag = " ⚠️ OVER BREAK"
+            if user.get("username"):
+                overbreak.append(f"@{user['username']}")
+            else:
+                overbreak.append(user["name"])
+
+        if away_total > away_limit:
+            away_flag = " ⚠️ OVER AWAY"
+            if user.get("username"):
+                overaway.append(f"@{user['username']}")
+            else:
+                overaway.append(user["name"])
+
+        lines.append(f"{user['name']}")
+        lines.append(f"Break: {break_total} mins{break_flag}")
+        lines.append(f"Away: {away_total} mins{away_flag}")
+        lines.append("")
+
+    tagged = list(dict.fromkeys(overbreak + overaway))
+    return "\n".join(lines).strip(), tagged
+
+
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not update.effective_chat or not update.effective_user:
         return False
@@ -319,6 +415,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def onduty(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user or not update.effective_chat:
+        return
+
+    async with DATA_LOCK:
+        data = load_data()
+        uid = str(update.effective_user.id)
+        ensure_user(
+            data,
+            uid,
+            update.effective_chat.id,
+            update.effective_user.first_name,
+            update.effective_user.username,
+        )
+        user = data["users"].get(uid)
+        user["on_duty"] = True
+        save_data(data)
+
+    # silent - no group message
+
+
 async def start_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_user or not update.effective_chat:
         return
@@ -346,6 +463,7 @@ async def start_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "type": "break",
             "start": current.isoformat(),
         }
+        user["on_duty"] = True
         save_data(data)
 
     await update.message.reply_text(
@@ -394,6 +512,7 @@ async def end_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining = max(0, break_limit - user["break_total"])
         exceeded = max(0, user["break_total"] - break_limit)
 
+        user["on_duty"] = True
         save_data(data)
 
     message = (
@@ -437,6 +556,7 @@ async def start_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "type": "away",
             "start": current.isoformat(),
         }
+        user["on_duty"] = True
         save_data(data)
 
     await update.message.reply_text(
@@ -488,6 +608,7 @@ async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session_exceeded = max(0, session_minutes - away_session_limit)
         total_exceeded = max(0, user["away_total"] - away_total_limit)
 
+        user["on_duty"] = True
         save_data(data)
 
     message = (
@@ -554,37 +675,35 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for user in users.values():
         active = user.get("active")
-        if not active:
-            working_users.append(user)
-            continue
+        if active:
+            try:
+                start_dt = datetime.datetime.fromisoformat(active["start"])
+            except Exception:
+                continue
 
-        try:
-            start_dt = datetime.datetime.fromisoformat(active["start"])
-        except Exception:
-            continue
+            elapsed = minutes_between(start_dt, current)
 
-        elapsed = minutes_between(start_dt, current)
-
-        if active["type"] == "break":
-            limit = get_user_break_limit(data, user)
-            break_users.append({
-                "name": user["name"],
-                "elapsed": elapsed,
-                "since": format_clock(start_dt),
-                "marker": get_status_marker(elapsed, limit, "break"),
-                "role": normalize_role(user.get("role", "UNKNOWN")),
-            })
-        elif active["type"] == "away":
-            limit = get_away_session_limit(data)
-            away_users.append({
-                "name": user["name"],
-                "elapsed": elapsed,
-                "since": format_clock(start_dt),
-                "marker": get_status_marker(elapsed, limit, "away"),
-                "role": normalize_role(user.get("role", "UNKNOWN")),
-            })
+            if active["type"] == "break":
+                limit = get_user_break_limit(data, user)
+                break_users.append({
+                    "name": user["name"],
+                    "elapsed": elapsed,
+                    "since": format_clock(start_dt),
+                    "marker": get_status_marker(elapsed, limit, "break"),
+                    "role": normalize_role(user.get("role", "UNKNOWN")),
+                })
+            elif active["type"] == "away":
+                limit = get_away_session_limit(data)
+                away_users.append({
+                    "name": user["name"],
+                    "elapsed": elapsed,
+                    "since": format_clock(start_dt),
+                    "marker": get_status_marker(elapsed, limit, "away"),
+                    "role": normalize_role(user.get("role", "UNKNOWN")),
+                })
         else:
-            working_users.append(user)
+            if is_working_user(user):
+                working_users.append(user)
 
     working_counts = role_count(working_users)
     break_counts = role_count(break_users)
@@ -733,6 +852,71 @@ async def setuserbreak(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def setlimit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_chat:
+        return
+
+    if not await is_admin(update, context):
+        await update.message.reply_text("This command is for admins only.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage:\n/setlimit 90\n/setlimit indo06 nikka 30"
+        )
+        return
+
+    async with DATA_LOCK:
+        data = load_data()
+
+        # /setlimit 90
+        if len(context.args) == 1:
+            try:
+                new_limit = int(context.args[0])
+            except ValueError:
+                await update.message.reply_text("Break limit must be a number.")
+                return
+
+            if new_limit <= 0:
+                await update.message.reply_text("Break limit must be greater than 0.")
+                return
+
+            data["default_break_limit"] = new_limit
+            save_data(data)
+
+            await update.message.reply_text(
+                f"✅ Break limit updated for all users.\n\nNew limit: {new_limit} minutes"
+            )
+            return
+
+        # /setlimit indo06 nikka 30
+        try:
+            custom_limit = int(context.args[-1])
+        except ValueError:
+            await update.message.reply_text("Break limit must be a number.")
+            return
+
+        if custom_limit <= 0:
+            await update.message.reply_text("Break limit must be greater than 0.")
+            return
+
+        target_name = " ".join(context.args[:-1]).strip()
+        uid, user = find_user_flexible(data, update.effective_chat.id, target_name)
+
+        if not user:
+            await update.message.reply_text(
+                "User not found. Make sure the user already clicked any button in this chat."
+            )
+            return
+
+        user["custom_break_limit"] = custom_limit
+        save_data(data)
+
+    await update.message.reply_text(
+        f"✅ Custom break limit updated.\n\nUser: {user['name']}\nBreak limit: {custom_limit} minutes"
+    )
+
+
 async def resetuserbreak(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_chat:
         return
@@ -859,6 +1043,7 @@ async def forceend(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if total_exceeded > 0:
                 exceeded_text += f"\n⚠️ OVER AWAY TOTAL by {total_exceeded} mins."
 
+        user["on_duty"] = True
         save_data(data)
 
     await update.message.reply_text(
@@ -896,6 +1081,7 @@ async def resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user["break_total"] = 0
         user["away_total"] = 0
         user["active"] = None
+        user["on_duty"] = False
         save_data(data)
 
     await update.message.reply_text(
@@ -904,7 +1090,7 @@ async def resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def resetall(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
+    if not update.message or not update.effective_chat:
         return
 
     if not await is_admin(update, context):
@@ -913,22 +1099,23 @@ async def resetall(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with DATA_LOCK:
         data = load_data()
+        chat_id = update.effective_chat.id
+
+        # reset current chat only
+        users_to_delete = [
+            uid for uid, user in data["users"].items()
+            if user.get("chat_id") == chat_id
+        ]
+        for uid in users_to_delete:
+            del data["users"][uid]
 
         data["default_break_limit"] = DEFAULT_BREAK_LIMIT
-
-        for user in data["users"].values():
-            user["break_total"] = 0
-            user["away_total"] = 0
-            user["active"] = None
-            user["custom_break_limit"] = None
-
         save_data(data)
 
     await update.message.reply_text(
-        "🔄 All users reset successfully\n\n"
-        "• Totals cleared\n"
-        "• Active status cleared\n"
-        "• Break limit reverted to default (60 mins)"
+        "🔄 Reset all complete.\n"
+        "✅ Ready for new shift.\n"
+        "✅ Break limit reset to 60 mins."
     )
 
 
@@ -943,133 +1130,37 @@ async def endshift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with DATA_LOCK:
         data = load_data()
         chat_id = update.effective_chat.id
-        users = get_users_for_chat(data, chat_id)
-
-    if not users:
-        await update.message.reply_text("No users found in this chat.")
-        return
-
-    msg = "📊 END SHIFT SUMMARY\n\n"
-
-    for user in sorted(users.values(), key=lambda x: x["name"]):
-        break_total = user["break_total"]
-        away_total = user["away_total"]
-
-        break_flag = " ⚠️ OVER BREAK" if break_total > get_user_break_limit(data, user) else ""
-        away_flag = " ⚠️ OVER AWAY" if away_total > get_away_total_limit(data) else ""
-
-        msg += (
-            f"{user['name']}\n"
-            f"Break: {break_total} mins{break_flag}\n"
-            f"Away: {away_total} mins{away_flag}\n\n"
-        )
+        msg, _ = build_whole_shift_summary(data, chat_id)
 
     await update.message.reply_text(msg)
 
 
-async def auto_shift_reset(context: ContextTypes.DEFAULT_TYPE):
+async def auto_shift_summary(context: ContextTypes.DEFAULT_TYPE):
     async with DATA_LOCK:
         data = load_data()
-        current = now_local()
-        users = data["users"]
-
-        if not users:
-            return
-
-        msg = "📊 SHIFT SUMMARY\n\n"
-
-        overbreak = []
-        overaway = []
-        total_break = 0
-        total_away = 0
-        tag_users = []
-
-        for user in users.values():
-            if normalize_role(user.get("role")) in ["CSL", "PL", "HTL"]:
-                if user.get("username"):
-                    tag_users.append(f"@{user['username']}")
-
-            active = user.get("active")
-            if active:
-                closed = close_active_session(data, user, current)
-                if not closed:
-                    user["active"] = None
-
-            break_total = user.get("break_total", 0)
-            away_total = user.get("away_total", 0)
-
-            total_break += break_total
-            total_away += away_total
-
-            break_limit = get_user_break_limit(data, user)
-            away_limit = get_away_total_limit(data)
-
-            if break_total > break_limit:
-                excess = break_total - break_limit
-                overbreak.append(f"• {user['name']} — {break_total} mins (+{excess})")
-
-            if away_total > away_limit:
-                excess = away_total - away_limit
-                overaway.append(f"• {user['name']} — {away_total} mins (+{excess})")
-
-        if overbreak:
-            msg += "🚨 OVER BREAK:\n" + "\n".join(overbreak) + "\n\n"
-
-        if overaway:
-            msg += "🚨 OVER AWAY:\n" + "\n".join(overaway) + "\n\n"
-
-        msg += "━━━━━━━━━━━━━━\n\n"
-
-        for user in sorted(users.values(), key=lambda x: x["name"]):
-            break_total = user.get("break_total", 0)
-            away_total = user.get("away_total", 0)
-
-            break_flag = " ⚠️ OVER BREAK" if break_total > get_user_break_limit(data, user) else ""
-            away_flag = " ⚠️ OVER AWAY" if away_total > get_away_total_limit(data) else ""
-
-            msg += (
-                f"{user['name']}\n"
-                f"Break: {break_total} mins{break_flag}\n"
-                f"Away: {away_total} mins{away_flag}\n\n"
-            )
-
-        msg += (
-            f"━━━━━━━━━━━━━━\n"
-            f"📈 TEAM TOTALS\n"
-            f"Break: {total_break} mins\n"
-            f"Away: {total_away} mins"
-        )
-
         summary_chat_id = get_summary_chat_id(data)
 
-        if summary_chat_id:
-            try:
-                await context.bot.send_message(chat_id=summary_chat_id, text=msg)
-            except Exception:
-                pass
+        if not summary_chat_id:
+            return
 
-            unique_tags = list(dict.fromkeys(tag_users))
-            if unique_tags and (overbreak or overaway):
-                try:
-                    await context.bot.send_message(
-                        chat_id=summary_chat_id,
-                        text=(
-                            f"🚨 Attention: {' '.join(unique_tags)}\n"
-                            f"Overbreak / Overaway detected. Please check your team."
-                        )
-                    )
-                except Exception:
-                    pass
+        msg, tagged = build_whole_shift_summary(data, summary_chat_id)
 
-        data["default_break_limit"] = DEFAULT_BREAK_LIMIT
+    try:
+        await context.bot.send_message(chat_id=summary_chat_id, text=msg)
+    except Exception:
+        return
 
-        for user in users.values():
-            user["break_total"] = 0
-            user["away_total"] = 0
-            user["active"] = None
-            user["custom_break_limit"] = None
-
-        save_data(data)
+    if tagged:
+        try:
+            await context.bot.send_message(
+                chat_id=summary_chat_id,
+                text=(
+                    f"🚨 Attention: {' '.join(tagged)}\n"
+                    f"😭 Overaway/Overbreak detected. Please check your team."
+                )
+            )
+        except Exception:
+            pass
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1078,7 +1169,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
-    if text == "☕ Start Break":
+    if text == "🟢 On Duty":
+        await onduty(update, context)
+    elif text == "☕ Start Break":
         await start_break(update, context)
     elif text == "☕ End Break":
         await end_break(update, context)
@@ -1099,15 +1192,15 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.job_queue.run_daily(
-        auto_shift_reset,
+        auto_shift_summary,
         time=datetime.time(hour=7, minute=0, tzinfo=TIMEZONE),
-        name="morning_shift_reset",
+        name="morning_shift_summary",
     )
 
     app.job_queue.run_daily(
-        auto_shift_reset,
+        auto_shift_summary,
         time=datetime.time(hour=19, minute=0, tzinfo=TIMEZONE),
-        name="night_shift_reset",
+        name="night_shift_summary",
     )
 
     app.add_handler(CommandHandler("start", start))
@@ -1116,6 +1209,7 @@ def main():
     app.add_handler(CommandHandler("setbreak", setbreak))
     app.add_handler(CommandHandler("setallbreak", setallbreak))
     app.add_handler(CommandHandler("setuserbreak", setuserbreak))
+    app.add_handler(CommandHandler("setlimit", setlimit))
     app.add_handler(CommandHandler("resetuserbreak", resetuserbreak))
     app.add_handler(CommandHandler("currentlimits", currentlimits))
     app.add_handler(CommandHandler("forceend", forceend))
