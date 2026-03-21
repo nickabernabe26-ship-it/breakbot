@@ -30,8 +30,11 @@ keyboard = [
     ["🚶 Start Away", "🚶 End Away"],
     ["📊 Status", "📋 My Total"],
 ]
-reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
+reply_markup = ReplyKeyboardMarkup(
+    keyboard,
+    resize_keyboard=True,
+    is_persistent=True,
+)
 DATA_LOCK = asyncio.Lock()
 
 
@@ -1113,10 +1116,11 @@ async def resetall(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_data(data)
 
     await update.message.reply_text(
-        "🔄 Reset all complete.\n"
-        "✅ Ready for new shift.\n"
-        "✅ Break limit reset to 60 mins."
-    )
+    "🔄 Reset all complete.\n"
+    "✅ Ready for new shift.\n"
+    "✅ Break limit reset to 60 mins.",
+    reply_markup=reply_markup,
+)
 
 
 async def endshift(update: Update, context: ContextTypes.DEFAULT_TYPE):
