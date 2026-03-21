@@ -106,7 +106,12 @@ def strip_existing_prefix(name: str) -> str:
 
 
 def build_display_name(role: str, fallback_name: str):
+    role = normalize_role(role)
     clean_name = strip_existing_prefix(fallback_name)
+
+    if not clean_name or clean_name == "UNKNOWN":
+        clean_name = "UNKNOWN"
+
     return f"IND06-{role}-{clean_name}"
 
 
