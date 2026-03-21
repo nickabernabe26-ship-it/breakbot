@@ -409,7 +409,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.first_name,
+            update.effective_user.username or update.effective_user.first_name,
             update.effective_user.username,
         )
         save_data(data)
@@ -433,7 +433,7 @@ async def onduty(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.first_name,
+            update.effective_user.username or update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -454,7 +454,7 @@ async def start_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.first_name,
+            update.effective_user.username or update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -490,7 +490,7 @@ async def end_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.first_name,
+            update.effective_user.username or update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -547,7 +547,7 @@ async def start_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.first_name,
+            update.effective_user.username or update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -583,7 +583,7 @@ async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.first_name,
+            update.effective_user.username or update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -645,7 +645,7 @@ async def mytotal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.first_name,
+            update.effective_user.username or update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
