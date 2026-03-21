@@ -372,16 +372,17 @@ def build_whole_shift_summary(data, chat_id: int):
             if user.get("username"):
                 overbreak.append(f"@{user['username']}")
             else:
-                overbreak.append(user["name"])
+                overbreak.append(build_display_name(user["role"], user["name"]))
 
         if away_total > away_limit:
             away_flag = " ⚠️ OVER AWAY"
             if user.get("username"):
                 overaway.append(f"@{user['username']}")
             else:
-                overaway.append(user["name"])
+                overaway.append(build_display_name(user["role"], user["name"]))
 
-        lines.append(f"{user['name']}")
+        clean_name = build_display_name(user["role"], user["name"])
+        lines.append(f"{clean_name}")
         lines.append(f"Break: {break_total} mins{break_flag}")
         lines.append(f"Away: {away_total} mins{away_flag}")
         lines.append("")
@@ -699,7 +700,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if active["type"] == "break":
                 limit = get_user_break_limit(data, user)
                 break_users.append({
-                    "name": user["name"],
+                    "name": build_display_name(user["role"], user["name"]),
                     "elapsed": elapsed,
                     "since": format_clock(start_dt),
                     "marker": get_status_marker(elapsed, limit, "break"),
@@ -708,7 +709,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif active["type"] == "away":
                 limit = get_away_session_limit(data)
                 away_users.append({
-                    "name": user["name"],
+                    "name": build_display_name(user["role"], user["name"]),
                     "elapsed": elapsed,
                     "since": format_clock(start_dt),
                     "marker": get_status_marker(elapsed, limit, "away"),
