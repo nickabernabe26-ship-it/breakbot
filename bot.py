@@ -76,22 +76,28 @@ def detect_role_from_username_or_name(username=None, fallback_name=None):
 
 
 def strip_existing_prefix(name: str) -> str:
-    value = (name or "UNKNOWN").upper().replace(" ", "-")
-    prefixes = [
-        "IND06-CS-",
-        "IND06-CSL-",
-        "IND06-HTL-",
-        "IND06-QI-",
-        "IND06-WD-",
-        "IND06-DP-",
-        "IND06-PL-",
-        "IND06-TL-",
-    ]
-    for prefix in prefixes:
-        if value.startswith(prefix):
-            return value[len(prefix):]
-    if value.startswith("IND06-"):
-        return value[6:]
+    value = (name or "").upper().replace(" ", "-")
+
+    # Remove NONE anywhere
+    value = value.replace("NONE", "")
+
+    # Remove IND prefix
+    if value.startswith("IND"):
+        parts = value.split("-")
+        if len(parts) > 1:
+            value = "-".join(parts[1:])
+
+    # Remove role prefixes if duplicated
+    for role in ["CS", "CSL", "HTL", "PHTL", "AS", "QI", "WD", "DP", "PL"]:
+        if value.startswith(role):
+            value = value[len(role):]
+
+    # Clean extra dashes
+    value = value.strip("-")
+
+    if not value:
+        return "UNKNOWN"
+
     return value
 
 
