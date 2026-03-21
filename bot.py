@@ -381,7 +381,7 @@ def build_whole_shift_summary(data, chat_id: int):
             else:
                 overaway.append(build_display_name(user["role"], user["name"]))
 
-        clean_name = build_display_name(user["role"], user["name"])
+        clean_name = build_display_name(normalize_role(user.get("role")), user["name"])
         lines.append(f"{clean_name}")
         lines.append(f"Break: {break_total} mins{break_flag}")
         lines.append(f"Away: {away_total} mins{away_flag}")
