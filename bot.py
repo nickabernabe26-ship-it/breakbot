@@ -17,7 +17,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "/mnt/data/break_data.json"
 TIMEZONE = ZoneInfo("Asia/Manila")
 
-ROLES = ["CS", "CSL", "HTL", "QI", "WD", "DP", "PL"]
+ROLES = ["CS", "CSL", "HTL", "PHTL", "AS", "QI", "WD", "DP", "PL"]
 
 DEFAULT_BREAK_LIMIT = 60
 DEFAULT_AWAY_TOTAL_LIMIT = 60
@@ -56,19 +56,23 @@ def detect_role_from_username_or_name(username=None, fallback_name=""):
     text = f"{username or ''} {fallback_name or ''}".lower()
 
     # REMOVED: tl detection
-    if "csl" in text:
-        return "CSL"
-    if "htl" in text:
-        return "HTL"
-    if "pl" in text:
-        return "PL"
-    if "qi" in text:
-        return "QI"
-    if "wd" in text:
-        return "WD"
-    if "dp" in text:
-        return "DP"
-    return "CS"
+    if "phtl" in text:
+    return "PHTL"
+if "htl" in text:
+    return "HTL"
+if "csl" in text:
+    return "CSL"
+if "-as-" in text:
+    return "AS"
+if "pl" in text:
+    return "PL"
+if "qi" in text:
+    return "QI"
+if "wd" in text:
+    return "WD"
+if "dp" in text:
+    return "DP"
+return "CS"
 
 
 def strip_existing_prefix(name: str) -> str:
