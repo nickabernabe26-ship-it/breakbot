@@ -48,7 +48,11 @@ def default_data():
 
 
 def normalize_role(role: str) -> str:
-    role = (role or "CS").upper()
+    role = (role or "").upper()
+
+    if role in ["NONE", "", "UNKNOWN"]:
+        return "CS"
+
     return role if role in ROLES else "CS"
 
 
