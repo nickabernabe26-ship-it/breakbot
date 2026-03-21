@@ -17,7 +17,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "/mnt/data/break_data.json"
 TIMEZONE = ZoneInfo("Asia/Manila")
 
-ROLES = ["CS", "CSL", "HTL", "PHTL", "AS", "QI", "WD", "DP", "PL"]
+ROLES = ["CS", "CSL", "HTL", "QI", "WD", "DP", "PL"]
 
 DEFAULT_BREAK_LIMIT = 60
 DEFAULT_AWAY_TOTAL_LIMIT = 60
@@ -30,11 +30,8 @@ keyboard = [
     ["🚶 Start Away", "🚶 End Away"],
     ["📊 Status", "📋 My Total"],
 ]
-reply_markup = ReplyKeyboardMarkup(
-    keyboard,
-    resize_keyboard=True,
-    is_persistent=True,
-)
+reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 DATA_LOCK = asyncio.Lock()
 
 
@@ -48,25 +45,18 @@ def default_data():
 
 
 def normalize_role(role: str) -> str:
-    role = (role or "").upper()
-
-    if role in ["NONE", "", "UNKNOWN"]:
-        return "CS"
-
+    role = (role or "CS").upper()
     return role if role in ROLES else "CS"
 
 
-def detect_role_from_username_or_name(username=None, fallback_name=None):
+def detect_role_from_username_or_name(username=None, fallback_name=""):
     text = f"{username or ''} {fallback_name or ''}".lower()
 
-    if "phtl" in text:
-        return "PHTL"
-    if "htl" in text:
-        return "HTL"
+    # REMOVED: tl detection
     if "csl" in text:
         return "CSL"
-    if "-as-" in text:
-        return "AS"
+    if "htl" in text:
+        return "HTL"
     if "pl" in text:
         return "PL"
     if "qi" in text:
@@ -75,43 +65,31 @@ def detect_role_from_username_or_name(username=None, fallback_name=None):
         return "WD"
     if "dp" in text:
         return "DP"
-
-        return "CS"
+    return "CS"
 
 
 def strip_existing_prefix(name: str) -> str:
-    value = (name or "").upper().replace(" ", "-")
-
-    # Remove NONE anywhere
-    value = value.replace("NONE", "")
-
-    # Remove IND prefix
-    if value.startswith("IND"):
-        parts = value.split("-")
-        if len(parts) > 1:
-            value = "-".join(parts[1:])
-
-    # Remove role prefixes if duplicated
-    for role in ["CS", "CSL", "HTL", "PHTL", "AS", "QI", "WD", "DP", "PL"]:
-        if value.startswith(role):
-            value = value[len(role):]
-
-    # Clean extra dashes
-    value = value.strip("-")
-
-    if not value:
-        return "UNKNOWN"
-
+    value = (name or "UNKNOWN").upper().replace(" ", "-")
+    prefixes = [
+        "IND06-CS-",
+        "IND06-CSL-",
+        "IND06-HTL-",
+        "IND06-QI-",
+        "IND06-WD-",
+        "IND06-DP-",
+        "IND06-PL-",
+        "IND06-TL-",
+    ]
+    for prefix in prefixes:
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    if value.startswith("IND06-"):
+        return value[6:]
     return value
 
 
 def build_display_name(role: str, fallback_name: str):
-    role = normalize_role(role)
     clean_name = strip_existing_prefix(fallback_name)
-
-    if not clean_name or clean_name == "UNKNOWN":
-        clean_name = "UNKNOWN"
-
     return f"IND06-{role}-{clean_name}"
 
 
@@ -381,17 +359,16 @@ def build_whole_shift_summary(data, chat_id: int):
             if user.get("username"):
                 overbreak.append(f"@{user['username']}")
             else:
-                overbreak.append(build_display_name(user["role"], user["name"]))
+                overbreak.append(user["name"])
 
         if away_total > away_limit:
             away_flag = " ⚠️ OVER AWAY"
             if user.get("username"):
                 overaway.append(f"@{user['username']}")
             else:
-                overaway.append(build_display_name(user["role"], user["name"]))
+                overaway.append(user["name"])
 
-        clean_name = build_display_name(normalize_role(user.get("role")), user["name"])
-        lines.append(f"{clean_name}")
+        lines.append(f"{user['name']}")
         lines.append(f"Break: {break_total} mins{break_flag}")
         lines.append(f"Away: {away_total} mins{away_flag}")
         lines.append("")
@@ -425,7 +402,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.username or update.effective_user.first_name,
+            update.effective_user.first_name,
             update.effective_user.username,
         )
         save_data(data)
@@ -449,7 +426,7 @@ async def onduty(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.username or update.effective_user.first_name,
+            update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -470,7 +447,7 @@ async def start_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.username or update.effective_user.first_name,
+            update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -506,7 +483,7 @@ async def end_break(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.username or update.effective_user.first_name,
+            update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -563,7 +540,7 @@ async def start_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.username or update.effective_user.first_name,
+            update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -599,7 +576,7 @@ async def end_away(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.username or update.effective_user.first_name,
+            update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -661,7 +638,7 @@ async def mytotal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data,
             uid,
             update.effective_chat.id,
-            update.effective_user.username or update.effective_user.first_name,
+            update.effective_user.first_name,
             update.effective_user.username,
         )
         user = data["users"].get(uid)
@@ -709,7 +686,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if active["type"] == "break":
                 limit = get_user_break_limit(data, user)
                 break_users.append({
-                    "name": build_display_name(user["role"], user["name"]),
+                    "name": user["name"],
                     "elapsed": elapsed,
                     "since": format_clock(start_dt),
                     "marker": get_status_marker(elapsed, limit, "break"),
@@ -718,7 +695,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif active["type"] == "away":
                 limit = get_away_session_limit(data)
                 away_users.append({
-                    "name": build_display_name(user["role"], user["name"]),
+                    "name": user["name"],
                     "elapsed": elapsed,
                     "since": format_clock(start_dt),
                     "marker": get_status_marker(elapsed, limit, "away"),
@@ -1136,11 +1113,10 @@ async def resetall(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_data(data)
 
     await update.message.reply_text(
-    "🔄 Reset all complete.\n"
-    "✅ Ready for new shift.\n"
-    "✅ Break limit reset to 60 mins.",
-    reply_markup=reply_markup,
-)
+        "🔄 Reset all complete.\n"
+        "✅ Ready for new shift.\n"
+        "✅ Break limit reset to 60 mins."
+    )
 
 
 async def endshift(update: Update, context: ContextTypes.DEFAULT_TYPE):
