@@ -52,27 +52,27 @@ def normalize_role(role: str) -> str:
     return role if role in ROLES else "CS"
 
 
-def detect_role_from_username_or_name(username=None, fallback_name=""):
+def detect_role_from_username_or_name(username=None, fallback_name=None):
     text = f"{username or ''} {fallback_name or ''}".lower()
 
-    # REMOVED: tl detection
     if "phtl" in text:
-    return "PHTL"
-if "htl" in text:
-    return "HTL"
-if "csl" in text:
-    return "CSL"
-if "-as-" in text:
-    return "AS"
-if "pl" in text:
-    return "PL"
-if "qi" in text:
-    return "QI"
-if "wd" in text:
-    return "WD"
-if "dp" in text:
-    return "DP"
-return "CS"
+        return "PHTL"
+    if "htl" in text:
+        return "HTL"
+    if "csl" in text:
+        return "CSL"
+    if "-as-" in text:
+        return "AS"
+    if "pl" in text:
+        return "PL"
+    if "qi" in text:
+        return "QI"
+    if "wd" in text:
+        return "WD"
+    if "dp" in text:
+        return "DP"
+
+        return "CS"
 
 
 def strip_existing_prefix(name: str) -> str:
